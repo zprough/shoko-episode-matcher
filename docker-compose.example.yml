@@ -1,0 +1,25 @@
+# Example service to add to your existing Shoko stack.
+# Build the image first from this repo:  docker build -t shoko-matcher:latest .
+# If you copy this file into another directory, remove `build: .` and keep
+# `image: shoko-matcher:latest`. Adjust SHOKO_URL if your Shoko service has a
+# different name/port, and make sure both share a Docker network.
+services:
+  shoko-matcher:
+    build: .
+    image: shoko-matcher:latest
+    container_name: shoko-matcher
+    restart: unless-stopped
+    environment:
+      SHOKO_URL: http://shoko-server:8111
+      SHOKO_APIKEY: ${SHOKO_APIKEY:?set SHOKO_APIKEY in your .env}
+      TZ: ${TZ:-UTC}
+    ports:
+      # localhost-only by default. Use "8080:8080" for trusted-LAN access.
+      - "127.0.0.1:8080:8080"
+    # If shoko-server is defined in another compose project, attach both to the
+    # same external network instead of relying on the default network:
+    # networks:
+    #   - shoko
+# networks:
+#   shoko:
+#     external: true

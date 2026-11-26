@@ -83,7 +83,7 @@ tests/
 `--config`, `-v`.
 
 ## Tests
-`python -m pytest -q` → 25 passing (parser + resolver + mocked HTTP pipeline).
+`python -m pytest -q` → 29 passing (parser + resolver + mocked HTTP pipeline + web API).
 
 ## Known limitations / follow-ups
 - TMDB is not required; group air-date ordering handles seasons. TMDB episode
@@ -91,3 +91,15 @@ tests/
 - Season mapping assumes siblings are ordered by AniDB air date; unusual release
   groupings may need `--min-confidence` tuning or manual review.
 - AniDB series creation is asynchronous; re-run after the import completes.
+
+## Addendum — Web UI & Docker (implemented)
+- `runner.py` holds the shared run loop; the CLI and web UI both use it.
+- `webapp.py` (FastAPI) exposes `GET /` (single-page UI), `/api/health`,
+  `/api/config`, `POST /api/jobs` (one concurrent job; 409 when busy),
+  `GET /api/jobs`, `GET /api/jobs/{id}`, and CSV/JSON report downloads.
+- Per-file errors are isolated (recorded as `skip`); auth errors abort the job.
+- `Dockerfile` installs `.[web]`, runs as non-root, exposes port 8080, and has a
+  healthcheck. `docker-compose.example.yml` shows the Shoko stack wiring.
+- `SHOKO_URL` / `SHOKO_APIKEY` configure the container; the UI is unauthenticated
+  and should stay on a trusted network.
+- `tests/test_webapp.py` covers the UI/API with a fake runner.

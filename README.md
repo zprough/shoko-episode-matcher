@@ -152,3 +152,58 @@ using a fake API client (no network required).
   title matching and may need a lower threshold or manual review.
 * `--series` filters on the resolved series name; unmatched files are marked
   `skip`, not `review`.
+
+## Web UI
+
+The image (and `pip install .[web]`) exposes a small FastAPI UI:
+
+```powershell
+python -m pip install -e .[web]
+shoko-matcher-web          # or: python -m uvicorn shoko_matcher.webapp:app --port 8080
+```
+
+Open <http://localhost:8080>.
+
+* Dry-run by default; tick **Apply** to actually create links.
+* Options mirror the CLI: min confidence, limit, series filter, import folder,
+  episode ID type, link method, create-missing-series.
+* Live progress, a result table, and CSV/JSON downloads for each job.
+* Only one job runs at a time (a second request returns HTTP 409).
+* Jobs live in memory (last 20) and are lost when the process restarts.
+
+Endpoints: `GET /`, `GET /api/health`, `GET /api/config`, `POST /api/jobs`,
+`GET /api/jobs`, `GET /api/jobs/{id}`,
+`GET /api/jobs/{id}/report.csv`, `GET /api/jobs/{id}/report.json`.
+
+The UI has **no authentication**. Keep it on a trusted network, or bind it to
+localhost only (`-p 127.0.0.1:8080:8080`).
+
+## Docker
+
+```powershell
+docker build -t shoko-matcher:latest .
+docker run --rm -p 127.0.0.1:8080:8080 ^
+  -e SHOKO_URL=http://shoko-server:8111 ^
+  -e SHOKO_APIKEY=your-key ^
+  shoko-matcher:latest
+```
+
+To add it to an existing Shoko compose stack, copy the `shoko-matcher` service
+from `docker-compose.example.yml` into your compose file, put `SHOKO_APIKEY` in
+`.env`, and make sure the matcher and Shoko share a Docker network (the default
+compose network is fine when both services are in the same file). Set
+`SHOKO_URL` to Shoko's service name, e.g. `http://shoko-server:8111`.
+
+Container environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SHOKO_URL` | `http://localhost:8111` | Shoko base URL |
+| `SHOKO_APIKEY` | — | API key (required) |
+| `MATCHER_HOST` | `0.0.0.0` | Bind address |
+| `MATCHER_PORT` | `8080` | Listen port |
+| `MATCHER_LOG_LEVEL` | `info` | uvicorn log level |
+| `TZ` | system | Container timezone |
+
+The image runs as a non-root user and has a `HEALTHCHECK` against
+`/api/health`.

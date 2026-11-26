@@ -14,12 +14,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
 dev = [
     "pytest>=7.4",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.scripts]
 shoko-matcher = "shoko_matcher.cli:main"
+shoko-matcher-web = "shoko_matcher.webapp:run"
 
 [tool.setuptools.packages.find]
 include = ["shoko_matcher*"]

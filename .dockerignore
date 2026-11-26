@@ -1,0 +1,29 @@
+# Version control / local state
+.git
+.gitignore
+**/__pycache__
+**/*.py[cod]
+.eggs
+*.egg-info
+build
+dist
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Secrets and local config
+file-matcher-api.txt
+shoko-matcher.config.json
+
+# Repo-only docs / fixtures
+tests
+shoko-server-swagger.json
+solution-plan.md
+Dockerfile
+docker-compose.example.yml
+
+# Generated reports
+*.report.csv
+*.report.json
+report.csv
+report.json

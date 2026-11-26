@@ -1,6 +1,7 @@
 # Secrets
 file-matcher-api.txt
 shoko-matcher.config.json
+.env
 
 # Python
 __pycache__/
