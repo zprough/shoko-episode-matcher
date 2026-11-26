@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shoko-matcher"
+version = "0.1.0"
+description = "Find unrecognized files in Shoko Server and manually link them to episodes via the Shoko v3 REST API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+shoko-matcher = "shoko_matcher.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["shoko_matcher*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,93 @@
+# Shoko Filename Matcher — Build Plan (implemented)
+
+## Goal
+Find files Shoko Server lists as **Unrecognized** and link them to the correct
+AniDB-based episode(s) through the Shoko v3 REST API. Most such files are already
+in the right series folder with clean names; they are unrecognized only because
+their ED2K hash is unknown to AniDB.
+
+## Resolved open questions
+1. **`EpisodeIDs` in `POST /File/{fileID}/Link`** — treated as **Shoko episode
+   IDs** (the `Episode.IDs.ID` value), because every other `/File/{fileID}/*`
+   endpoint speaks Shoko IDs. Configurable with `--episode-id-type {shoko,anidb}`.
+2. **`RangeStart` type prefix** — the swagger only says "append a type prefix".
+   To avoid guessing, the default link path resolves concrete episode IDs and uses
+   `POST /File/{id}/Link`. `--link-method range` is opt-in and uses `S`/`C`/`T`/`P`/`O`
+   prefixes for non-regular types.
+3. **`POST /api/auth`** — not needed; auth is the `apikey` header. The tool reads
+   the key from `--apikey`, `--apikey-file`, `SHOKO_APIKEY`, a JSON config file, or
+   a local `file-matcher-api.txt`.
+
+## Endpoints used
+- `GET /Dashboard/Stats` → `UnrecognizedFiles` (before/after).
+- `GET /File?include_only=Unrecognized&include=AbsolutePaths` (page size 1000) →
+  `ID`, `Locations[].RelativePath`, `ImportFolderID`, `AbsolutePath`.
+- `GET /Series/PathEndsWith/{folder}` → series already living in the folder.
+- `GET /Series/Search?query=&fuzzy=true&limit=10` → `ExactMatch`, `Distance`,
+  `LengthDifference`.
+- `GET /Series/{id}` and `GET /Series/{id}/AniDB` → `AniDB.AirDate`,
+  `AniDB.EpisodeCount`, titles.
+- `GET /Series/{id}/Group`, `GET /Group/{id}/Series?recursive=true` → sibling
+  series (AniDB seasons), sorted by air date.
+- `GET /Series/{id}/Episode?includeMissing=True&includeFiles=true` (paginated) →
+  all episode types; `Files` reveals whether an episode is already linked.
+- Writes: `POST /File/{id}/Link` (default) or `POST /File/{id}/LinkFromSeries`
+  (`--link-method range`). Undo remains `DELETE /File/{id}/Link`.
+- Optional: `GET /AniDB/BanStatus`, `GET /Series/AniDB/Search?local=false`,
+  `POST /Series/AniDB/{id}/Refresh?createSeriesEntry=true` behind
+  `--create-missing-series` (off by default).
+- `GET /Settings` → `AniDb.MyList_AddFiles` warning before `--apply`.
+
+## Matching pipeline
+1. Paginate unrecognized files.
+2. Parse path: `S02E05`, `2x05`, `E01-E02`, ` - 146`, `SP01`, `NCOP1`, `v2`,
+   `Part 2`, `S00`, dotted release names, resolution/codec exclusion.
+3. Resolve series: path lookup first (strongest), then fuzzy title search.
+4. Resolve target:
+   - `S02E05` → Nth air-date sibling series in the group, episode 5.
+   - bare/absolute numbers → walk group in air-date order, summing Episode counts.
+   - specials/credits → base series, matching `AniDB.Type`.
+   - unmappable season → review (never silently link the base episode).
+5. Confidence: path/title score + episode exists + unlinked + mapping, minus
+   ambiguity. Default threshold 80. Only `link` at/above threshold.
+6. Dry-run default; `--apply` enables writes.
+
+## Package layout
+```
+shoko_matcher/
+  cli.py        argparse, run loop, MyList/AniDB-create handling
+  config.py     env/config-file/CLI resolution, base URL normalisation
+  client.py     httpx client: retries, pagination, endpoint methods
+  models.py     tolerant dataclasses for all API payloads
+  parser.py     filename/path parser
+  resolver.py   series + season/absolute resolution, confidence, Decision
+  linker.py     the only write path (Link / LinkFromSeries)
+  reporter.py   human summary + CSV/JSON report
+tests/
+  test_parser.py        filename parsing
+  test_resolver.py      season/absolute/ambiguity/linking logic
+  test_integration.py   httpx.MockTransport full dry-run + link body
+```
+
+## Safety
+- Dry-run by default; only GETs unless `--apply`.
+- Only link creation; never move/rename/ignore/delete or change settings.
+- Idempotent (unrecognized == unlinked), flags already-linked targets.
+- Ambiguous, low-confidence, missing-episode, and unmappable-season cases → review.
+- MyList warning and optional AniDB ban check.
+
+## CLI
+`--dry-run/--apply`, `--min-confidence`, `--series`, `--import-folder`, `--limit`,
+`--report`, `--create-missing-series`, `--episode-id-type`, `--link-method`,
+`--timeout`, `--max-retries`, `--base-url`, `--apikey`, `--apikey-file`,
+`--config`, `-v`.
+
+## Tests
+`python -m pytest -q` → 25 passing (parser + resolver + mocked HTTP pipeline).
+
+## Known limitations / follow-ups
+- TMDB is not required; group air-date ordering handles seasons. TMDB episode
+  cross-references could later refine tricky mappings.
+- Season mapping assumes siblings are ordered by AniDB air date; unusual release
+  groupings may need `--min-confidence` tuning or manual review.
+- AniDB series creation is asynchronous; re-run after the import completes.

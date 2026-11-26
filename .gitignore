@@ -1,0 +1,22 @@
+# Secrets
+file-matcher-api.txt
+shoko-matcher.config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated reports
+*.report.csv
+*.report.json
+report.csv
+report.json
