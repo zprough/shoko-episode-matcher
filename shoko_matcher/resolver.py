@@ -8,6 +8,7 @@ the season/absolute-number logic unit-testable with a fake client.
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional, Protocol
@@ -24,6 +25,8 @@ from .models import (
     UnrecognizedFile,
 )
 from .parser import parse_filename
+
+LOG = logging.getLogger(__name__)
 
 
 class SeriesApi(Protocol):  # pragma: no cover - structural typing only
@@ -126,12 +129,28 @@ class Resolver:
     def _path_candidates(self, hint: str, folder: Optional[str]) -> list[_Candidate]:
         if not folder:
             return []
-        try:
-            series_list = self.api.series_by_path(folder)
-        except Exception:  # noqa: BLE001 - path lookups are best-effort
-            return []
+        # Try the full folder first, then progressively simpler paths. A
+        # multi-segment path is sent as %2F inside one route segment and some
+        # servers reject that, so falling back to the series-name hint and the
+        # first path segment makes folder-based matching much more reliable.
+        paths: list[str] = [folder]
+        if hint and hint != folder:
+            paths.append(hint)
+        segments = [s for s in folder.replace("\\", "/").split("/") if s]
+        if segments and segments[0] not in paths:
+            paths.append(segments[0])
+
+        series_list: list[Series] = []
+        for path in paths:
+            try:
+                series_list = self.api.series_by_path(path)
+            except Exception:  # noqa: BLE001 - path lookups are best-effort
+                series_list = []
+            if series_list:
+                break
         if not series_list:
             return []
+
         unique = len(series_list) == 1
         candidates: list[_Candidate] = []
         for series in series_list:
@@ -320,11 +339,25 @@ class Resolver:
         for number in numbers:
             episode = self.find_episode(target_episodes, number, kind)
             if episode is None:
+                if not target_episodes:
+                    decision.reason = (
+                        f"series {target.id} has no episodes loaded; refresh its "
+                        "AniDB data and re-run"
+                    )
+                else:
+                    sample = ", ".join(
+                        f"{e.number}:{e.kind.value}"
+                        for e in target_episodes[:8]
+                    )
+                    LOG.debug(
+                        "episode %s (%s) missing in series %s; available=%s",
+                        number, kind.value, target.id, sample,
+                    )
+                    decision.reason = (
+                        f"episode {number} ({kind.value}) not found in series "
+                        f"{target.id}; available: {sample}"
+                    )
                 decision.action = "review"
-                decision.reason = (
-                    f"episode {number} ({kind.value}) not found in series "
-                    f"{target.id}"
-                )
                 return decision
             resolved.append(episode)
 

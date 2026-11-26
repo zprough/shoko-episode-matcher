@@ -38,14 +38,24 @@ def make_episodes(sid, count, kind=EpisodeKind.EPISODE, linked=()):
 
 
 class FakeApi:
-    def __init__(self, series_list, episodes_map, path_series=None, hits=None):
+    def __init__(
+        self,
+        series_list,
+        episodes_map,
+        path_series=None,
+        hits=None,
+        path_map=None,
+    ):
         self._by_id = {s.id: s for s in series_list}
         self.series_list = series_list
         self.episodes_map = episodes_map
         self.path_series = path_series if path_series is not None else []
         self.hits = hits if hits is not None else []
+        self.path_map = path_map
 
     def series_by_path(self, path):
+        if self.path_map is not None:
+            return self.path_map.get(path, [])
         return self.path_series
 
     def search_series(self, query, fuzzy=True, limit=10):
@@ -187,3 +197,38 @@ def test_unmappable_season_goes_to_review():
     decision = Resolver(api, cfg()).resolve(file_for("Solo/Solo S03E05.mkv"))
     assert decision.action == "review"
     assert "map season" in decision.reason
+
+
+def test_path_falls_back_to_parent_folder_for_season_dirs():
+    s1 = make_series(1, "Bleach", "2004-10-05", 366)
+    api = FakeApi(
+        [s1],
+        {1: make_episodes(1, 366)},
+        path_map={"Bleach/Season 01": [], "Bleach": [s1]},
+    )
+    decision = Resolver(api, cfg()).resolve(
+        file_for(
+            "Bleach/Season 01/Bleach (2004) - S01E01 - 001 - "
+            "The Day I Became a Shinigami [DSNP][WEBDL-1080p]-NORViNE.mkv"
+        )
+    )
+    assert decision.action == "link"
+    assert decision.series_id == 1
+    assert decision.episode_ids == [101]
+
+
+def test_missing_episode_reports_available_numbers():
+    s1 = make_series(1, "Solo", "2020-01-01", 3)
+    api = FakeApi([s1], {1: make_episodes(1, 3)}, path_series=[s1])
+    decision = Resolver(api, cfg()).resolve(file_for("Solo/Solo - 09.mkv"))
+    assert decision.action == "review"
+    assert "available:" in decision.reason
+    assert "1:Episode" in decision.reason
+
+
+def test_empty_episode_list_suggests_refresh():
+    s1 = make_series(1, "Solo", "2020-01-01", 0)
+    api = FakeApi([s1], {1: []}, path_series=[s1])
+    decision = Resolver(api, cfg()).resolve(file_for("Solo/Solo - 01.mkv"))
+    assert decision.action == "review"
+    assert "no episodes loaded" in decision.reason
