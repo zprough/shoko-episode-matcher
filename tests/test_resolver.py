@@ -189,6 +189,7 @@ def test_series_filter_skips_non_matching():
         file_for("Solo/Solo - 05.mkv")
     )
     assert decision.action == "skip"
+    assert decision.filtered is True
 
 
 def test_unmappable_season_goes_to_review():
@@ -232,3 +233,125 @@ def test_empty_episode_list_suggests_refresh():
     decision = Resolver(api, cfg()).resolve(file_for("Solo/Solo - 01.mkv"))
     assert decision.action == "review"
     assert "no episodes loaded" in decision.reason
+
+
+def test_path_lookup_uses_absolute_directory():
+    s1 = make_series(1, "Bleach", "2004-10-05", 366)
+    api = FakeApi(
+        [s1],
+        {1: make_episodes(1, 366)},
+        path_map={
+            "/mnt/anime/Bleach/Season 01": [s1],
+            "Bleach/Season 01": [],
+            "Bleach": [],
+        },
+    )
+    name = (
+        "Bleach (2004) - S01E01 - 001 - The Day I Became a Shinigami "
+        "[DSNP][WEBDL-1080p]-NORViNE.mkv"
+    )
+    file = UnrecognizedFile(
+        id=7,
+        locations=[
+            FileLocation(
+                1,
+                f"Bleach/Season 01/{name}",
+                absolute_path=f"/mnt/anime/Bleach/Season 01/{name}",
+            )
+        ],
+    )
+    decision = Resolver(api, cfg()).resolve(file)
+    assert decision.action == "link"
+    assert decision.series_id == 1
+    assert decision.method == "path"
+    assert decision.episode_ids == [101]
+
+
+def test_episode_title_similarity_lifts_fuzzy_match_over_threshold():
+    s1 = make_series(59, "Bleach", "2004-10-05", 366)
+    episodes = make_episodes(59, 366)
+    episodes[0].title = "The Day I Became a Shinigami"
+    hits = [SeriesSearchHit(59, 602, "Bleach", exact_match=True)]
+    api = FakeApi([s1], {59: episodes}, path_series=[], hits=hits)
+    decision = Resolver(api, cfg()).resolve(
+        file_for(
+            "Bleach/Season 01/Bleach (2004) - S01E01 - 001 - The Day I "
+            "Became a Shinigami [DSNP][WEBDL-1080p]-NORViNE.mkv"
+        )
+    )
+    assert decision.action == "link"
+    assert decision.confidence >= 80
+    assert decision.episode_ids == [5901]
+
+
+def test_exact_folder_title_breaks_franchise_ambiguity():
+    bleacher = make_series(59, "Bleach", "2004-10-05", 366)
+    movie = make_series(60, "Bleach: Memories of Nobody", "2006-01-01", 1)
+    hits = [
+        SeriesSearchHit(59, 602, "Bleach", exact_match=True),
+        SeriesSearchHit(
+            60, 603, "Bleach: Memories of Nobody", exact_match=False,
+            distance=0.6,
+        ),
+    ]
+    api = FakeApi(
+        [bleacher, movie],
+        {59: make_episodes(59, 366), 60: make_episodes(60, 1)},
+        path_series=[],
+        hits=hits,
+    )
+    decision = Resolver(api, cfg()).resolve(
+        file_for(
+            "Bleach/Season 01/Bleach (2004) - S01E01 - 001 - The Day I "
+            "Became a Shinigami [DSNP][WEBDL-1080p]-NORViNE.mkv"
+        )
+    )
+    assert decision.action == "link"
+    assert decision.series_id == 59
+    assert decision.reason == "matched"
+    assert decision.confidence >= 80
+
+
+def test_already_matched_sibling_files_select_series():
+    bleacher = make_series(59, "Bleach", "2004-10-05", 366)
+    movie = make_series(60, "Bleach: Memories of Nobody", "2006-01-01", 1)
+    episodes = make_episodes(59, 366)
+    episodes[0].file_dirs = {"downloads/bleach s1"}
+    episodes[1].file_dirs = {"downloads/bleach s1"}
+    hits = [
+        SeriesSearchHit(59, 602, "Bleach", exact_match=True),
+        SeriesSearchHit(
+            60, 603, "Bleach: Memories of Nobody", exact_match=False,
+            distance=0.6,
+        ),
+    ]
+    api = FakeApi(
+        [bleacher, movie],
+        {59: episodes, 60: make_episodes(60, 1)},
+        path_series=[],
+        hits=hits,
+    )
+    decision = Resolver(api, cfg()).resolve(
+        file_for(
+            "Downloads/Bleach S1/Bleach (2004) - S01E01 - 001 - The Day I "
+            "Became a Shinigami [DSNP][WEBDL-1080p]-NORViNE.mkv"
+        )
+    )
+    assert decision.action == "link"
+    assert decision.series_id == 59
+    assert decision.confidence >= 80
+
+
+def test_second_season_uses_absolute_episode_on_base_series():
+    s1 = make_series(59, "Bleach", "2004-10-05", 366)
+    api = FakeApi([s1], {59: make_episodes(59, 366)}, path_series=[s1])
+    decision = Resolver(api, cfg()).resolve(
+        file_for(
+            "Bleach/Season 02/Bleach (2004) - S02E01 - 021 - Enter! The "
+            "World of the Shinigami [DSNP][WEBDL-1080p]-NORViNE.mkv"
+        )
+    )
+    assert decision.action == "link"
+    assert decision.series_id == 59
+    assert decision.episode_ids == [5921]
+    assert "absolute" in decision.method

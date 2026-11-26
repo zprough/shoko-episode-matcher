@@ -27,6 +27,11 @@ _CODEC = re.compile(
     r"ac3|dts|dual[\s._-]?audio)\b",
     re.I,
 )
+_SOURCE = re.compile(
+    r"\b(?:WEB[-\s]?DL|WEBRip|WEB|BluRay|Blu-Ray|BDRip|BRRip|DVDRip|HDTV|"
+    r"DSNP|HULU|AMZN)\b",
+    re.I,
+)
 _SEASON_EP = re.compile(
     r"\bS(?P<season>\d{1,2})\s*[._\- ]?\s*E(?P<ep>\d{1,4})"
     r"(?:\s*[-~]\s*E?(?P<end>\d{1,4}))?",
@@ -85,6 +90,56 @@ def _pick_folder_title(folder: Optional[str]) -> str:
     return ""
 
 
+_GROUP_SUFFIX = re.compile(r"\s[-–—]\s*[A-Za-z0-9_]+\s*$")
+_LEADING_NUMBER = re.compile(
+    r"^\s*[-–—.:]*\s*\d{1,4}\s*[-–—.:]*\s*"
+)
+
+
+def _clean_episode_title(text: str) -> str:
+    """Best-effort extraction of an episode title from the text that follows
+    the episode marker (e.g. ``- 001 - The Day I Became a Shinigami [DSNP]``)."""
+    text = _BRACKETS.sub(" ", text)
+    text = _SOURCE.sub(" ", text)
+    text = _RESOLUTION.sub(" ", text)
+    text = _CODEC.sub(" ", text)
+    text = _VERSION.sub(" ", text)
+    text = _LEADING_NUMBER.sub(" ", text)
+    text = _GROUP_SUFFIX.sub(" ", text)
+    text = re.sub(r"[._]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    text = text.strip(" -–—.:[](){}")
+    # Require something title-like; ignore stray tags / numbers.
+    if len(re.sub(r"[^A-Za-z]", "", text)) < 3:
+        return ""
+    return text
+
+
+def _looks_like_absolute_episode(stem, match, end_raw, episode: int) -> bool:
+    """Return True when the trailing ``- NNN`` after ``SxxEyy`` is an absolute
+    episode label rather than a range end (e.g. ``S02E01 - 021 - Title``).
+
+    Ranges are explicit (``E01-E02`` / ``E01-02``); a dash-delimited number
+    that is zero-padded to three digits or far from the relative episode is a
+    separate absolute number.
+    """
+    try:
+        end_val = int(end_raw)
+    except (TypeError, ValueError):
+        return False
+    if end_val <= episode:
+        return False
+    left = stem[: match.start("end")]
+    # "E02" style range end stays a range.
+    if re.search(r"[Ee]\s*[-–—]?\s*$", left):
+        return False
+    if len(end_raw) >= 3 and end_raw.startswith("0"):
+        return True
+    dash_left = bool(re.search(r"[-–—]\s*$", left))
+    dash_right = bool(re.match(r"\s*[-–—]\s+", stem[match.end():]))
+    return dash_left and dash_right and (end_val - episode) > 3
+
+
 def _bare_numbers(text: str) -> list[int]:
     text = _BRACKETS.sub(" ", text)
     text = _RESOLUTION.sub(" ", text)
@@ -100,7 +155,9 @@ def _bare_numbers(text: str) -> list[int]:
 
 
 def parse_filename(
-    relative_path: str, folder: Optional[str] = None
+    relative_path: str,
+    folder: Optional[str] = None,
+    absolute_numbering: bool = False,
 ) -> ParsedFilename:
     """Parse a file's relative path (or filename) into a :class:`ParsedFilename`."""
     raw = relative_path
@@ -138,6 +195,8 @@ def parse_filename(
     season: Optional[int] = None
     episode: Optional[int] = None
     episode_end: Optional[int] = None
+    absolute_episode: Optional[int] = None
+    episode_match_end: Optional[int] = None
     is_absolute = False
     matched = False
 
@@ -146,6 +205,7 @@ def parse_filename(
         if special:
             kind = EpisodeKind.SPECIAL
             cut = min(cut, special.start())
+            episode_match_end = special.end()
             if special.group(1):
                 episode = int(special.group(1))
                 matched = True
@@ -163,7 +223,23 @@ def parse_filename(
             season = int(found.group("season"))
             episode = ep_val
             end_raw = found.groupdict().get("end")
-            episode_end = int(end_raw) if end_raw else None
+            if end_raw:
+                left = stem[: found.start("end")]
+                e_prefixed = bool(re.search(r"[Ee]\s*[-–—]?\s*$", left))
+                spaced = bool(re.search(r"\s[-–—]\s*$", left))
+                # With absolute numbering (Sonarr {absolute:000}) the trailing
+                # "- NNN" after SxxEyy is the absolute episode, never a range.
+                if not e_prefixed and (
+                    (absolute_numbering and spaced)
+                    or _looks_like_absolute_episode(
+                        stem, found, end_raw, ep_val
+                    )
+                ):
+                    absolute_episode = int(end_raw)
+                    episode_end = None
+                else:
+                    episode_end = int(end_raw)
+            episode_match_end = found.end()
             cut = min(cut, found.start())
             matched = True
             break
@@ -174,6 +250,7 @@ def parse_filename(
             episode = int(found.group("ep"))
             end_raw = found.group("end")
             episode_end = int(end_raw) if end_raw else None
+            episode_match_end = found.end()
             cut = min(cut, found.start())
             matched = True
 
@@ -184,6 +261,7 @@ def parse_filename(
             end_raw = found.group("end")
             episode_end = int(end_raw) if end_raw else None
             is_absolute = True
+            episode_match_end = found.end()
             cut = min(cut, found.start())
             matched = True
 
@@ -211,6 +289,10 @@ def parse_filename(
     if not series_hint:
         series_hint = filename_title or _clean_title(stem)
 
+    episode_title = ""
+    if episode is not None and episode_match_end is not None:
+        episode_title = _clean_episode_title(stem[episode_match_end:])
+
     if episode is None:
         notes.append("no episode number found")
 
@@ -221,6 +303,8 @@ def parse_filename(
         season=season,
         episode=episode,
         episode_end=episode_end,
+        absolute_episode=absolute_episode,
+        episode_title=episode_title,
         kind=kind,
         is_absolute=is_absolute,
         version=version,

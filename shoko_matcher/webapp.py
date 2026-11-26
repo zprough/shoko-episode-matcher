@@ -109,6 +109,8 @@ def _build_config(request: dict[str, Any]) -> Config:
         overrides["link_method"] = link_method
     if request.get("create_missing_series"):
         overrides["create_missing_series"] = True
+    if request.get("absolute_numbering"):
+        overrides["absolute_numbering"] = True
     return replace(base, **overrides)
 
 
@@ -193,6 +195,7 @@ class RunRequest(BaseModel):
     episode_id_type: Optional[str] = None
     link_method: Optional[str] = None
     create_missing_series: bool = False
+    absolute_numbering: bool = False
 
 
 @app.get("/", response_class=HTMLResponse)

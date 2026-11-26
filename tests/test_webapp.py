@@ -72,6 +72,11 @@ def test_index_and_health():
     page = client.get("/")
     assert page.status_code == 200
     assert "Shoko Filename Matcher" in page.text
+    # The results table shows a human-readable season/episode target instead
+    # of opaque episode IDs.
+    assert "<th>Target</th>" in page.text
+    assert "targetLabel" in page.text
+    assert "<th>Episodes</th>" not in page.text
     assert client.get("/api/health").json()["status"] == "ok"
 
 
@@ -128,3 +133,8 @@ def test_build_config_applies_overrides():
 def test_build_config_rejects_invalid_choices():
     with pytest.raises(ConfigError):
         webapp._build_config({"episode_id_type": "bogus"})
+
+
+def test_build_config_sets_absolute_numbering():
+    assert webapp._build_config({}).absolute_numbering is False
+    assert webapp._build_config({"absolute_numbering": True}).absolute_numbering is True

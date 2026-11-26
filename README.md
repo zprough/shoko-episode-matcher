@@ -79,11 +79,12 @@ script `shoko-matcher` after installation.
 --dry-run             Only GET (default)
 --apply               Actually create links
 --min-confidence N    Auto-link threshold, 0-100 (default 80)
---series NAME         Only handle series matching this name
+--series NAME         Only handle series matching this name (others are hidden from output)
 --import-folder ID    Only files in this import folder
---limit N             Process at most N files
+--limit N             Process at most N files (filtered-out files don't count)
 --report PATH         Write a CSV or JSON report (by extension)
 --create-missing-series  Allow queued AniDB refreshes that create series
+--absolute-numbering  Treat trailing -NNN after SxxEyy as the absolute episode (Sonarr {absolute:000})
 --episode-id-type {shoko,anidb}   IDs used by /File/{id}/Link (default shoko)
 --link-method {episode,range}     Link by episode IDs or series range (default episode)
 --timeout SECONDS     HTTP timeout (default 30)
@@ -103,8 +104,13 @@ script `shoko-matcher` after installation.
    * `GET /Series/Search?query=&fuzzy=true` — fuzzy title matching using Shoko's
      `ExactMatch` / `Distance` / `LengthDifference`.
 4. Resolve the episode:
-   * Load episodes with `GET /Series/{id}/Episode?includeMissing=True&includeFiles=true`
-     (all types, so missing specials/credits are included).
+   * Load episodes with
+     `GET /Series/{id}/Episode?includeMissing=True&includeFiles=true&includeDataFrom=AniDB`
+     (all types, so missing specials/credits are included). `includeDataFrom=AniDB`
+     is required — otherwise Shoko may return episodes with an empty `AniDB`
+     sub-object (`EpisodeNumber=0`, `Type=Unknown`) and number lookups fail.
+     `GET /Series/{id}?includeDataFrom=AniDB` is used the same way for
+     `AirDate` / `EpisodeCount`.
    * **Season mapping** (`S02`): treat each airing-order sibling series in the
      group (`GET /Series/{id}/Group`, `GET /Group/{id}/Series?recursive=true`,
      sorted by `AniDB.AirDate`) as a season.
@@ -166,7 +172,7 @@ Open <http://localhost:8080>.
 
 * Dry-run by default; tick **Apply** to actually create links.
 * Options mirror the CLI: min confidence, limit, series filter, import folder,
-  episode ID type, link method, create-missing-series.
+  episode ID type, link method, create-missing-series, absolute numbering.
 * Live progress, a result table, and CSV/JSON downloads for each job.
 * Only one job runs at a time (a second request returns HTTP 409).
 * Jobs live in memory (last 20) and are lost when the process restarts.

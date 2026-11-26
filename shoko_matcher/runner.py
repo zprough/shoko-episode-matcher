@@ -102,7 +102,6 @@ def run_matching(
     ):
         if config.limit is not None and processed >= config.limit:
             break
-        processed += 1
         path = (
             unrecognized.locations[0].display_path
             if unrecognized.locations
@@ -110,6 +109,10 @@ def run_matching(
         )
         try:
             decision = resolver.resolve(unrecognized)
+            if decision.filtered:
+                # Excluded by the series (or another user) filter: don't count
+                # it toward --limit, link it, or include it in any output.
+                continue
             if (
                 config.create_missing_series
                 and decision.series_id is None
@@ -127,6 +130,7 @@ def run_matching(
                 action="skip",
                 reason=f"error: {exc}",
             )
+        processed += 1
         outcome = linker.apply(decision)
         summary.decisions.append(decision)
         summary.outcomes[decision.file_id] = outcome

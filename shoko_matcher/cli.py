@@ -50,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow queuing AniDB refreshes that create missing series",
     )
     parser.add_argument(
+        "--absolute-numbering",
+        action="store_true",
+        help=(
+            "Treat a trailing '-NNN' after SxxEyy as the absolute episode "
+            "number (Sonarr '{absolute:000}'), not a range"
+        ),
+    )
+    parser.add_argument(
         "--episode-id-type",
         choices=["shoko", "anidb"],
         help="ID type used in /File/{id}/Link (default shoko)",

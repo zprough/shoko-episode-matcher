@@ -73,6 +73,12 @@ def _air_date_key(series: Series) -> tuple[str, int]:
     return (series.air_date or "9999-99-99", series.id)
 
 
+_SEASON_DIR = re.compile(
+    r"^(?:season\s*\d+|s\d+|specials?|movies?|ova|oad|extras?|complete|tv)$",
+    re.I,
+)
+
+
 class Resolver:
     def __init__(self, api: SeriesApi, config: Config) -> None:
         self.api = api
@@ -125,27 +131,65 @@ class Resolver:
         count = sum(1 for e in episodes if e.kind == EpisodeKind.EPISODE)
         return count or None
 
-    # -- series resolution -------------------------------------------------
-    def _path_candidates(self, hint: str, folder: Optional[str]) -> list[_Candidate]:
-        if not folder:
-            return []
-        # Try the full folder first, then progressively simpler paths. A
-        # multi-segment path is sent as %2F inside one route segment and some
-        # servers reject that, so falling back to the series-name hint and the
-        # first path segment makes folder-based matching much more reliable.
-        paths: list[str] = [folder]
-        if hint and hint != folder:
-            paths.append(hint)
-        segments = [s for s in folder.replace("\\", "/").split("/") if s]
-        if segments and segments[0] not in paths:
-            paths.append(segments[0])
+    def _sibling_match(self, series_id: int, target_dirs: set[str]) -> int:
+        """Count episodes of ``series_id`` whose files already live in one of
+        ``target_dirs`` (the folder of the file being matched)."""
+        if not target_dirs:
+            return 0
+        hits = 0
+        for episode in self.get_episodes(series_id):
+            if episode.file_dirs & target_dirs:
+                hits += 1
+        return hits
 
+    # -- series resolution -------------------------------------------------
+    @staticmethod
+    def _series_folder(folder: Optional[str]) -> str:
+        """Strip trailing season/specials folders to get the series root."""
+        if not folder:
+            return ""
+        segments = [s for s in folder.replace("\\", "/").split("/") if s]
+        while len(segments) > 1 and _SEASON_DIR.match(segments[-1].strip()):
+            segments.pop()
+        return "/".join(segments)
+
+    def _path_variants(
+        self,
+        hint: str,
+        folder: Optional[str],
+        absolute_dir: Optional[str],
+    ) -> list[str]:
+        variants: list[str] = []
+
+        def add(value: Optional[str]) -> None:
+            path = (value or "").replace("\\", "/").strip().rstrip("/")
+            if path and path not in variants:
+                variants.append(path)
+
+        # Most specific first: the absolute directory, the import-relative
+        # folder, the folder with trailing season dirs removed (the series
+        # root, e.g. "Bleach/Season 01" -> "Bleach"), then the title hint.
+        add(absolute_dir)
+        add(folder)
+        add(self._series_folder(folder))
+        add(hint)
+        return variants
+
+    def _path_candidates(
+        self,
+        hint: str,
+        folder: Optional[str],
+        absolute_dir: Optional[str] = None,
+    ) -> list[_Candidate]:
+        if not folder and not absolute_dir:
+            return []
         series_list: list[Series] = []
-        for path in paths:
+        for path in self._path_variants(hint, folder, absolute_dir):
             try:
                 series_list = self.api.series_by_path(path)
             except Exception:  # noqa: BLE001 - path lookups are best-effort
                 series_list = []
+            LOG.debug("path lookup %r -> %d series", path, len(series_list))
             if series_list:
                 break
         if not series_list:
@@ -188,9 +232,12 @@ class Resolver:
         return candidates
 
     def resolve_series(
-        self, hint: str, folder: Optional[str]
+        self,
+        hint: str,
+        folder: Optional[str],
+        absolute_dir: Optional[str] = None,
     ) -> tuple[Optional[_Candidate], bool]:
-        path_candidates = self._path_candidates(hint, folder)
+        path_candidates = self._path_candidates(hint, folder, absolute_dir)
         candidates = list(path_candidates)
         trust_path = (
             len(path_candidates) == 1
@@ -210,6 +257,66 @@ class Resolver:
         if not ranked:
             return None, False
         best = ranked[0]
+
+        # Prefer a series that already has recognised files in this exact
+        # folder. Sibling files are the strongest signal short of a path hit,
+        # and they resolve franchise-wide fuzzy ambiguity ("Bleach" vs
+        # "Bleach: Movie") using evidence already in the library.
+        target_dirs = {d.lower() for d in (folder, absolute_dir) if d}
+        if len(ranked) > 1 and target_dirs and not best.unique_path:
+            # Only inspect the strongest few candidates so we don't fetch
+            # episodes for every fuzzy hit; the right series is near the top.
+            shortlist = ranked[:5]
+            sibling_counts = {
+                c.series.id: self._sibling_match(c.series.id, target_dirs)
+                for c in shortlist
+            }
+            matched = [c for c in shortlist if sibling_counts.get(c.series.id)]
+            if matched:
+                matched.sort(
+                    key=lambda c: sibling_counts[c.series.id], reverse=True
+                )
+                top = matched[0]
+                top_count = sibling_counts[top.series.id]
+                second = (
+                    sibling_counts[matched[1].series.id]
+                    if len(matched) > 1
+                    else 0
+                )
+                if top_count > second and (
+                    top_count >= 2
+                    or best_title_similarity(top.series, hint) >= 0.6
+                ):
+                    top.score = max(top.score, 68.0)
+                    LOG.debug(
+                        "folder sibling match: series %s has %d linked file(s) "
+                        "in %s",
+                        top.series.id, top_count, sorted(target_dirs),
+                    )
+                    return top, False
+
+        # A unique exact title match against the folder/parse hint is as
+        # reliable as a unique path lookup. Fuzzy search returns the whole
+        # franchise for generic names ("Bleach"), which otherwise trips the
+        # ambiguity guard even when the folder name pins one series exactly.
+        hint_keys = {_normalize(hint)}
+        hint_keys.add(_normalize(re.sub(r"\b(?:19|20)\d{2}\b", " ", hint)))
+        hint_keys.discard("")
+        if hint_keys:
+            exact = [
+                c for c in ranked
+                if _normalize(c.series.name) in hint_keys
+            ]
+            if len(exact) == 1 and exact[0].score >= best.score - 1.0:
+                chosen = exact[0]
+                if chosen.score < 60.0:
+                    chosen.score = 60.0
+                LOG.debug(
+                    "exact title match %r -> series %s (score %.1f)",
+                    hint, chosen.series.id, chosen.score,
+                )
+                return chosen, False
+
         ambiguous = False
         if len(ranked) > 1 and not best.unique_path:
             ambiguous = (best.score - ranked[1].score) < 12.0
@@ -251,6 +358,18 @@ class Resolver:
         if kind is not EpisodeKind.EPISODE:
             return base, parsed.episode_span(), kind, "base"
         if parsed.season is not None and parsed.season >= 2:
+            # If the filename carries an explicit absolute episode number and
+            # the base series already contains it (a single long series such
+            # as Bleach), use it directly instead of mapping to a sibling.
+            absolute = parsed.absolute_episode
+            if absolute:
+                base_eps = self.get_episodes(base.id)
+                if self.find_episode(base_eps, absolute, EpisodeKind.EPISODE):
+                    LOG.debug(
+                        "season %s -> absolute episode %s on base series %s",
+                        parsed.season, absolute, base.id,
+                    )
+                    return base, [absolute], EpisodeKind.EPISODE, "absolute"
             siblings = self.get_siblings(base.id, base)
             chosen = self._map_season(parsed.season, base, siblings)
             if chosen is None:
@@ -294,6 +413,23 @@ class Resolver:
     def range_string(self, kind: EpisodeKind, number: int) -> str:
         return f"{self._RANGE_PREFIX.get(kind, '')}{number}"
 
+    @staticmethod
+    def _episode_title_bonus(title: str, episodes: list[Episode]) -> float:
+        """Score how well the filename's episode title matches the target.
+
+        Returns 0..10 points; 0 when the title is absent or too dissimilar so
+        unrelated release tags never inflate confidence.
+        """
+        if not title:
+            return 0.0
+        scores = [similarity(title, ep.title) for ep in episodes if ep.title]
+        if not scores:
+            return 0.0
+        best = max(scores)
+        if best < 0.6:
+            return 0.0
+        return round(10.0 * (best - 0.6) / 0.4, 1)
+
     # -- public entry point ------------------------------------------------
     def resolve(self, file: UnrecognizedFile) -> Decision:
         location = next(
@@ -301,14 +437,23 @@ class Resolver:
         )
         relative = location.relative_path if location else ""
         path = location.display_path if location else relative
-        parsed = parse_filename(relative)
+        absolute_dir: Optional[str] = None
+        if location and location.absolute_path:
+            absolute_dir = (
+                location.absolute_path.replace("\\", "/").rsplit("/", 1)[0]
+            )
+        parsed = parse_filename(
+            relative, absolute_numbering=self.config.absolute_numbering
+        )
         decision = Decision(file_id=file.id, path=path, parsed=parsed)
 
         if parsed.episode is None:
             decision.reason = "could not parse an episode number"
             return decision
 
-        best, ambiguous = self.resolve_series(parsed.series_hint, parsed.folder)
+        best, ambiguous = self.resolve_series(
+            parsed.series_hint, parsed.folder, absolute_dir
+        )
         if best is None:
             decision.action = "review"
             decision.reason = "no series match in local library"
@@ -323,6 +468,7 @@ class Resolver:
         ):
             decision.action = "skip"
             decision.reason = "does not match --series filter"
+            decision.filtered = True
             return decision
 
         target, numbers, kind, mapping = self._target_episodes(parsed, base)
@@ -373,6 +519,16 @@ class Resolver:
         confidence = best.score + 20.0 + 10.0
         if mapping != "base":
             confidence += 5.0
+        episode_bonus = self._episode_title_bonus(
+            parsed.episode_title, resolved
+        )
+        if episode_bonus:
+            confidence += episode_bonus
+            LOG.debug(
+                "episode title %r matched target (+%.1f)",
+                parsed.episode_title,
+                episode_bonus,
+            )
         if ambiguous:
             confidence -= 25.0
         decision.confidence = round(max(0.0, min(100.0, confidence)), 1)

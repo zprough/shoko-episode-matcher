@@ -69,6 +69,7 @@ a{color:var(--accent)}
       <div class="row" style="margin-top:14px">
         <label class="check"><input id="apply" type="checkbox"/><span>Apply &mdash; actually create links</span></label>
         <label class="check"><input id="create_missing_series" type="checkbox"/><span>Create missing series (AniDB)</span></label>
+        <label class="check"><input id="absolute_numbering" type="checkbox"/><span>Absolute numbering (Sonarr <code>{absolute:000}</code>)</span></label>
         <button id="run" class="primary" type="submit">Run</button>
         <span id="status" class="muted"></span>
       </div>
@@ -80,7 +81,7 @@ a{color:var(--accent)}
   </div>
   <div class="card" id="results" style="display:none">
     <h2>Results</h2>
-    <div class="scroll"><table><thead><tr><th>File</th><th>Action</th><th>Conf</th><th>Series</th><th>Episodes</th><th>Reason</th><th>Path</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <div class="scroll"><table><thead><tr><th>File</th><th>Action</th><th>Conf</th><th>Series</th><th>Target</th><th>Reason</th><th>Path</th></tr></thead><tbody id="rows"></tbody></table></div>
   </div>
 </main>
 """
@@ -125,6 +126,7 @@ function payload() {
     episode_id_type: $('episode_id_type').value,
     link_method: $('link_method').value,
     create_missing_series: $('create_missing_series').checked,
+    absolute_numbering: $('absolute_numbering').checked,
   };
 }
 
@@ -173,6 +175,30 @@ function stat(k, v, cls) {
     '</div><div class="k">' + esc(k) + '</div></div>';
 }
 
+function pad2(v) { return String(v).padStart(2, '0'); }
+
+// Human-readable season/episode the matcher is targeting, e.g. "S01E05",
+// "S01E01-E02", "SP1 (Special)". Replaces opaque episode IDs in the table.
+function targetLabel(r) {
+  const ep = r.episode;
+  if (ep == null || ep === '') return '—';
+  const kind = r.kind || 'Episode';
+  const isEpisode = kind === 'Episode';
+  const hasSeason = r.season != null && r.season !== '';
+  const prefix = {Special: 'SP', Credits: 'C', Trailer: 'T', Parody: 'P', Other: 'O'}[kind] || '';
+  let label;
+  if (isEpisode || hasSeason) {
+    label = (hasSeason ? 'S' + pad2(r.season) : '') + 'E' + pad2(ep);
+  } else {
+    label = prefix + ep;
+  }
+  if (r.episode_end != null && r.episode_end !== '' && Number(r.episode_end) > Number(ep)) {
+    label += '-' + ((isEpisode || hasSeason) ? 'E' + pad2(r.episode_end) : r.episode_end);
+  }
+  if (!isEpisode) label += ' (' + kind + ')';
+  return label;
+}
+
 function render(j) {
   $('status').textContent = j.status + (j.processed ? ' — ' + j.processed + ' files' : '');
   if (j.mylist_warning) {
@@ -206,7 +232,7 @@ function render(j) {
     '<td><span class="badge b-' + esc(r.action) + '">' + esc(r.action) + '</span></td>' +
     '<td>' + esc(r.confidence) + '</td>' +
     '<td>' + esc(r.series_name || '—') + '</td>' +
-    '<td>' + esc(r.episode_ids || '—') + '</td>' +
+    '<td>' + esc(targetLabel(r)) + '</td>' +
     '<td>' + esc(r.reason) + '</td>' +
     '<td class="path">' + esc(r.path) + '</td>' +
     '</tr>').join('');

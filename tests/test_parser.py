@@ -81,3 +81,52 @@ def test_folder_title_preferred():
     )
     assert parsed.series_hint == "Series A"
     assert parsed.episode == 5
+
+
+def test_episode_title_extracted_from_release_name():
+    parsed = parse_filename(
+        "Bleach/Season 01/Bleach (2004) - S01E01 - 001 - "
+        "The Day I Became a Shinigami [DSNP][WEBDL-1080p][AAC 2.0][JA]"
+        "[h264 8bit]-NORViNE.mkv"
+    )
+    assert parsed.episode == 1
+    assert parsed.episode_title == "The Day I Became a Shinigami"
+
+
+def test_episode_title_empty_for_plain_number():
+    parsed = parse_filename("Show/Show - 05.mkv")
+    assert parsed.episode == 5
+    assert parsed.episode_title == ""
+
+
+def test_absolute_episode_after_marker_is_not_a_range():
+    parsed = parse_filename(
+        "Bleach/Season 02/Bleach (2004) - S02E01 - 021 - "
+        "Enter! The World of the Shinigami [DSNP][WEBDL-1080p].mkv"
+    )
+    assert parsed.season == 2
+    assert parsed.episode == 1
+    assert parsed.episode_end is None
+    assert parsed.absolute_episode == 21
+    assert parsed.is_range is False
+    assert parsed.episode_title == "Enter! The World of the Shinigami"
+
+
+def test_explicit_episode_range_is_not_absolute():
+    parsed = parse_filename("Show/Show - S01E01-E02.mkv")
+    assert parsed.episode == 1
+    assert parsed.episode_end == 2
+    assert parsed.absolute_episode is None
+
+
+def test_absolute_numbering_option_forces_absolute_not_range():
+    name = "Show/Show - S02E01 - 2 - Title.mkv"
+    # Heuristic (default): a small, non-padded trailing number looks like a range.
+    plain = parse_filename(name)
+    assert plain.episode_end == 2
+    assert plain.absolute_episode is None
+    # Explicit Sonarr-style absolute numbering: treat it as the absolute number.
+    forced = parse_filename(name, absolute_numbering=True)
+    assert forced.episode == 1
+    assert forced.episode_end is None
+    assert forced.absolute_episode == 2

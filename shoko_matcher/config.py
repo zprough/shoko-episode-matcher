@@ -40,6 +40,7 @@ class Config:
     create_missing_series: bool = False
     episode_id_type: str = "shoko"  # shoko | anidb
     link_method: str = "episode"  # episode | range
+    absolute_numbering: bool = False
     timeout: float = 30.0
     max_retries: int = 4
     page_size: int = 1000
@@ -88,7 +89,7 @@ def _coerce(name: str, value: Any) -> Any:
             return float(value)
         except (TypeError, ValueError):
             return None
-    if name in {"dry_run", "create_missing_series"}:
+    if name in {"dry_run", "create_missing_series", "absolute_numbering"}:
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
@@ -137,6 +138,8 @@ def load_config(argv: Any) -> Config:
         values["dry_run"] = True
     if getattr(argv, "create_missing_series", False):
         values["create_missing_series"] = True
+    if getattr(argv, "absolute_numbering", False):
+        values["absolute_numbering"] = True
 
     # API key from file if still missing
     apikey_file = getattr(argv, "apikey_file", None)

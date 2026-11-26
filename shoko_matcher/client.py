@@ -7,6 +7,7 @@ retries with exponential backoff on transient failures, and JSON decoding.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Iterable, Iterator, Optional
 from urllib.parse import quote
@@ -21,6 +22,8 @@ from .models import (
     SeriesSearchHit,
     UnrecognizedFile,
 )
+
+LOG = logging.getLogger(__name__)
 
 
 class ShokoError(Exception):
@@ -207,7 +210,13 @@ class ShokoClient:
         ]
 
     def series(self, series_id: int) -> Optional[Series]:
-        data = self._request("GET", f"Series/{series_id}", allow_404=True)
+        # Ask for the AniDB sub-object explicitly; otherwise the server may
+        # return a stub and drop AirDate / EpisodeCount, which the resolver
+        # needs for season and absolute-number mapping.
+        params = [("includeDataFrom", "AniDB")]
+        data = self._request(
+            "GET", f"Series/{series_id}", params=params, allow_404=True
+        )
         return Series.from_api(data) if isinstance(data, dict) else None
 
     def series_anime(self, series_id: int) -> dict[str, Any]:
@@ -228,14 +237,25 @@ class ShokoClient:
         return [Series.from_api(item) for item in data if isinstance(item, dict)]
 
     def series_episodes(self, series_id: int) -> list[Episode]:
+        # ``includeDataFrom=AniDB`` is required; without it Shoko may return
+        # episodes whose ``AniDB`` sub-object is empty, yielding ``0:Unknown``
+        # for every entry and making number lookups impossible.
         params = [
             ("includeMissing", "True"),
             ("includeFiles", "true"),
+            ("includeDataFrom", "AniDB"),
         ]
-        return [
+        episodes = [
             Episode.from_api(raw)
             for raw in self._paginate(f"Series/{series_id}/Episode", params)
         ]
+        LOG.debug(
+            "series %s: %d episodes (sample: %s)",
+            series_id,
+            len(episodes),
+            ", ".join(f"{e.number}:{e.kind.value}" for e in episodes[:3]) or "-",
+        )
+        return episodes
 
     def tmdb_episode_xrefs(self, series_id: int) -> list[dict[str, Any]]:
         data = self._request(

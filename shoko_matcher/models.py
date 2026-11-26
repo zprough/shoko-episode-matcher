@@ -41,6 +41,8 @@ class ParsedFilename:
     season: Optional[int] = None
     episode: Optional[int] = None
     episode_end: Optional[int] = None
+    absolute_episode: Optional[int] = None
+    episode_title: str = ""
     kind: EpisodeKind = EpisodeKind.EPISODE
     is_absolute: bool = False
     version: Optional[int] = None
@@ -134,6 +136,10 @@ class Episode:
     title: str = ""
     air_date: Optional[str] = None
     file_ids: list[int] = field(default_factory=list)
+    # Lowercased directories (forward-slash normalised) that already hold a
+    # recognised file for this episode. Used to detect sibling files in the
+    # same folder as an unrecognised file.
+    file_dirs: set[str] = field(default_factory=set)
 
     @property
     def linked(self) -> bool:
@@ -143,11 +149,21 @@ class Episode:
     def from_api(cls, data: dict[str, Any]) -> "Episode":
         ids = data.get("IDs") or {}
         anidb = data.get("AniDB") or {}
-        file_ids = [
-            int(f.get("ID"))
-            for f in (data.get("Files") or [])
-            if isinstance(f, dict) and f.get("ID") is not None
-        ]
+        file_ids: list[int] = []
+        file_dirs: set[str] = set()
+        for raw_file in data.get("Files") or []:
+            if not isinstance(raw_file, dict):
+                continue
+            if raw_file.get("ID") is not None:
+                file_ids.append(int(raw_file.get("ID")))
+            for loc in raw_file.get("Locations") or []:
+                if not isinstance(loc, dict):
+                    continue
+                raw_path = loc.get("RelativePath") or loc.get("AbsolutePath") or ""
+                normalised = str(raw_path).replace("\\", "/").strip()
+                directory = normalised.rpartition("/")[0]
+                if directory:
+                    file_dirs.add(directory.lower())
         return cls(
             id=int(ids.get("ID") or 0),
             anidb_id=int(ids.get("AniDB") or 0),
@@ -156,6 +172,7 @@ class Episode:
             title=str(data.get("Name") or anidb.get("Title") or ""),
             air_date=anidb.get("AirDate"),
             file_ids=file_ids,
+            file_dirs=file_dirs,
         )
 
 
@@ -226,6 +243,7 @@ class Decision:
     confidence: float = 0.0
     action: str = "skip"  # link | review | skip
     reason: str = ""
+    filtered: bool = False  # excluded by a user filter (e.g. --series)
 
     @property
     def is_link(self) -> bool:
